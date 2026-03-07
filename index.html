@@ -9,14 +9,30 @@
     position: absolute; 
     top: 0; left: 0; 
     width: 100%; 
-    height: calc(100% + 60px); /* clips the footer */
+    height: calc(100% + 60px);
     border: none;
+  }
+  .error {
+    padding: 20px;
+    font-family: sans-serif;
+    color: #666;
   }
 </style>
 </head>
 <body>
-  <div class="wrap">
-    <iframe src="https://docs.google.com/spreadsheets/d/e/2PACX-1vS_3hVBLNKA1xqEto-nOqA_i47sUoNpizSeuXhSeZjUFfWK5ZSbJswLcansR-9Yh5m2lBphF9ARyOma/pubhtml?gid=1058408808&single=true&widget=false&headers=false&chrome=false&range=B4:G14"></iframe>
+  <div class="wrap" id="wrap">
+    <div class="error" id="error" style="display:none">No URL provided. Add ?url=YOUR_ENCODED_URL to the address.</div>
   </div>
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const url = params.get('url');
+    if (url) {
+      const iframe = document.createElement('iframe');
+      iframe.src = decodeURIComponent(url);
+      document.querySelector('.wrap').appendChild(iframe);
+    } else {
+      document.getElementById('error').style.display = 'block';
+    }
+  </script>
 </body>
 </html>
