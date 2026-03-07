@@ -1,6 +1,9 @@
 <!DOCTYPE html>
 <html>
 <head>
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <style>
   * { margin: 0; padding: 0; }
   body { overflow: hidden; }
@@ -21,18 +24,94 @@
 </head>
 <body>
   <div class="wrap" id="wrap">
-    <div class="error" id="error" style="display:none">No URL provided. Add ?url=YOUR_ENCODED_URL to the address.</div>
+    <div class="error" id="error" style="display:none"></div>
   </div>
   <script>
-    const params = new URLSearchParams(window.location.search);
-    const url = params.get('url');
-    if (url) {
+
+    // ─────────────────────────────────────────────
+    // OPTION C: Hardcode variables here
+    // Leave PUBLISHED_KEY empty to use URL parameters instead
+    // ─────────────────────────────────────────────
+
+    const PUBLISHED_KEY = '';   // The 2PACX-... key from the /e/ published URL
+    const GID           = '';   // Sheet tab ID, e.g. '1058408808'
+    const RANGE         = '';   // Optional. Cell range e.g. 'B4:G14'. Leave empty for full sheet.
+    const WIDGET        = false; // Show sheet tabs at bottom. Default: false
+    const HEADERS       = false; // Show row numbers and column letters. Default: false
+    const CHROME        = false; // Show title and footer. Default: false
+
+    // ─────────────────────────────────────────────
+    // DO NOT EDIT BELOW THIS LINE
+    // ─────────────────────────────────────────────
+
+    function buildURL(key, gid, range, widget, headers, chrome) {
+      let url = `https://docs.google.com/spreadsheets/d/e/${key}/pubhtml?gid=${gid}&single=true`;
+      url += `&widget=${widget}&headers=${headers}&chrome=${chrome}`;
+      if (range) url += `&range=${range}`;
+      return url;
+    }
+
+    function resolveParam(urlParams, name, hardcoded, defaultValue) {
+      if (hardcoded !== '' && hardcoded !== null && hardcoded !== undefined) return hardcoded;
+      const val = urlParams.get(name);
+      if (val === null) return defaultValue;
+      if (val === 'true') return true;
+      if (val === 'false') return false;
+      return val;
+    }
+
+    function buildFinalURL() {
+      const params = new URLSearchParams(window.location.search);
+
+      // If a full pre-encoded URL is passed, use it directly
+      const rawURL = params.get('url');
+      if (rawURL && !params.get('key')) return decodeURIComponent(rawURL);
+
+      // Resolve key (hardcoded or from params)
+      const key = PUBLISHED_KEY || params.get('key');
+      if (!key) return null;
+
+      const gid     = resolveParam(params, 'gid',     GID,     '');
+      const range   = resolveParam(params, 'range',   RANGE,   '');
+      const widget  = resolveParam(params, 'widget',  WIDGET === '' ? null : WIDGET,  false);
+      const headers = resolveParam(params, 'headers', HEADERS === '' ? null : HEADERS, false);
+      const chrome  = resolveParam(params, 'chrome',  CHROME === '' ? null : CHROME,  false);
+
+      if (!gid) return null;
+
+      return buildURL(key, gid, range, widget, headers, chrome);
+    }
+
+    const finalURL = buildFinalURL();
+
+    if (finalURL) {
       const iframe = document.createElement('iframe');
-      iframe.src = decodeURIComponent(url);
+      iframe.src = finalURL + '&_t=' + Date.now();
       document.querySelector('.wrap').appendChild(iframe);
     } else {
-      document.getElementById('error').style.display = 'block';
+      const err = document.getElementById('error');
+      err.style.display = 'block';
+      err.textContent = 'No URL provided. Either set the variables in the HTML, '
+                      + 'or pass parameters: ?key=PUBLISHED_KEY&gid=GID '
+                      + '— optional: &range=B4:G14&widget=false&headers=false&chrome=false. '
+                      + 'Or pass a full encoded URL: ?url=ENCODED_URL';
     }
   </script>
 </body>
 </html>
+```
+
+The three ways to use it now, with all optional params shown:
+
+**Option A — full encoded URL (unchanged):**
+```
+?url=ENCODED_URL
+```
+
+**Option B — individual parameters, all optional overrides included:**
+```
+?key=2PACX-...&gid=1058408808&range=B4:G14&widget=false&headers=false&chrome=false
+```
+Minimal version without range (full sheet, defaults applied):
+```
+?key=2PACX-...&gid=1058408808
