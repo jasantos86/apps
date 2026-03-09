@@ -1,0 +1,28 @@
+[
+  {
+    "kind": "column",
+    "name": "Custom SVG Icon",
+    "description": "Renders any SVG code as an image that automatically adapts to light and dark mode. Paste the full SVG from heroicons.com, Lucide, Phosphor, or any icon set that uses currentColor. Set your light and dark colors and the icon switches automatically.",
+    "author": "JAS",
+    "params": [
+      {
+        "name": "svg",
+        "displayName": "SVG code",
+        "type": "string"
+      },
+      {
+        "name": "lightColor",
+        "displayName": "Light mode color",
+        "type": "string"
+      },
+      {
+        "name": "darkColor",
+        "displayName": "Dark mode color",
+        "type": "string"
+      }
+    ],
+    "result": {
+      "type": "image-uri"
+    }
+  }
+]
