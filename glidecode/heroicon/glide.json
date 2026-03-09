@@ -2,12 +2,17 @@
   {
     "kind": "column",
     "name": "Hero Icon",
-    "description": "Returns a Heroicon as an image that automatically adapts to light and dark mode. Pass the icon name (e.g. 'home', 'user', 'heart'). Optionally pass a light color and dark color (CSS color strings).",
+    "description": "Returns a Heroicon as an image that automatically adapts to light and dark mode. Pass the icon name (e.g. 'home', 'user', 'check-badge'). Choose style: 'outline' (default), 'solid', or 'mini'. Optionally pass light/dark color strings.",
     "author": "JAS",
     "params": [
       {
         "name": "icon",
         "displayName": "Icon name",
+        "type": "string"
+      },
+      {
+        "name": "style",
+        "displayName": "Style (outline / solid / mini)",
         "type": "string"
       },
       {
