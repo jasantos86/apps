@@ -1,0 +1,28 @@
+[
+  {
+    "kind": "column",
+    "name": "Budget Approval Engine",
+    "description": "Multi-function budget authorization engine. Pass a function name and a JSON payload to compute approval chains, validate approvers, determine next steps, and check permissions. Functions: getRequiredApprovers, canUserApprove, getApprovalStatus, validateSubmission, getNextPendingStep, isCeoRequired.",
+    "author": "JAS",
+    "params": [
+      {
+        "name": "functionName",
+        "displayName": "Function name",
+        "type": "string"
+      },
+      {
+        "name": "payload",
+        "displayName": "JSON payload",
+        "type": "string"
+      },
+      {
+        "name": "config",
+        "displayName": "Config JSON (thresholds)",
+        "type": "string"
+      }
+    ],
+    "result": {
+      "type": "string"
+    }
+  }
+]
