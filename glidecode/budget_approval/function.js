@@ -6,131 +6,156 @@
 // from the Treasury App Authorization Map.
 //
 // USAGE:
-//   functionName (string) — which function to call
-//   payload      (string) — JSON object with function-specific inputs
-//   config       (string) — JSON object with threshold configuration
+//   function_name (string) — which function to call
+//   payload       (string) — JSON object with function-specific inputs
+//   config        (string) — JSON object with threshold configuration
 //
 // RETURNS:
-//   JSON string with the result (parse with JSON column in Glide)
+//   JSON string with the result (parse downstream in Glide)
 //
-// AVAILABLE FUNCTIONS:
-//   1. getRequiredApprovers  — Determine the full approval chain for a budget
-//   2. canUserApprove        — Check if a specific user can approve at this step
-//   3. getApprovalStatus     — Get current state of the approval workflow
-//   4. getNextPendingStep    — Who needs to act next?
-//   5. validateSubmission    — Can this budget be submitted for review?
-//   6. isCeoRequired         — Quick check: does this budget need CEO approval?
-//   7. getApprovalChainSummary — Human-readable summary for display
+// ─── FIELD NAMING CONVENTION ─────────────────────────────────────────────────
+// All payload fields use snake_case to match Glide column names:
+//   owner_id, owner_roles, project_manager_id, entity_manager_id,
+//   budget_total, term, approval_status, etc.
+//
+// ─── ROLES FORMAT ────────────────────────────────────────────────────────────
+// owner_roles / approver_roles accepts EITHER:
+//   • Comma-separated string:  "CEO, Accountant"
+//   • JSON array of strings:   ["CEO", "Accountant"]
+//
+// ─── AVAILABLE FUNCTIONS ─────────────────────────────────────────────────────
+//   1. getRequiredApprovers    — Full approval chain for a budget
+//   2. canUserApprove          — Can a specific user approve at this step?
+//   3. getApprovalStatus       — Current workflow state (progress, %)
+//   4. getNextPendingStep      — Who needs to act next?
+//   5. validateSubmission      — Pre-submit validation with errors/warnings
+//   6. isCeoRequired           — Quick boolean check
+//   7. getApprovalChainSummary — Human-readable chain for display
 //
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// ─────────────────────────────────────────────────────────────────────────────
-// DEFAULT CONFIGURATION
-// ─────────────────────────────────────────────────────────────────────────────
+
+// ─── DEFAULT CONFIGURATION ──────────────────────────────────────────────────
 const DEFAULT_CONFIG = {
   MONTHLY_BUDGET_LIMIT: 10000,
   ANNUAL_BUDGET_LIMIT: 50000,
   LUMPSUM_BUDGET_LIMIT: 100000
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// HELPER: Parse JSON safely
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── HELPER: Parse JSON safely ──────────────────────────────────────────────
 function safeParse(str) {
   if (!str) return null;
   try { return JSON.parse(str); }
   catch (e) { return null; }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// HELPER: Get the budget threshold for a given term type
-// ─────────────────────────────────────────────────────────────────────────────
-function getThresholdForTerm(termType, config) {
-  const term = (termType || "").toLowerCase().trim();
-  if (term === "monthly")  return config.MONTHLY_BUDGET_LIMIT  ?? DEFAULT_CONFIG.MONTHLY_BUDGET_LIMIT;
-  if (term === "annual")   return config.ANNUAL_BUDGET_LIMIT   ?? DEFAULT_CONFIG.ANNUAL_BUDGET_LIMIT;
-  if (term === "lump sum" || term === "lumpsum" || term === "lump_sum")
+// ─── HELPER: Normalize roles input ──────────────────────────────────────────
+// Accepts: "CEO, Accountant" OR ["CEO","Accountant"] OR "CEO" OR ["CEO"]
+// Returns: ["ceo", "accountant"]  (lowercase, trimmed array)
+function parseRoles(input) {
+  if (!input) return [];
+  if (Array.isArray(input)) {
+    return input.map(function(r) { return String(r).trim().toLowerCase(); }).filter(Boolean);
+  }
+  if (typeof input === "string") {
+    // Try JSON parse first (in case it's a stringified array)
+    var parsed = safeParse(input);
+    if (Array.isArray(parsed)) {
+      return parsed.map(function(r) { return String(r).trim().toLowerCase(); }).filter(Boolean);
+    }
+    // Otherwise treat as comma-separated
+    return input.split(",").map(function(r) { return r.trim().toLowerCase(); }).filter(Boolean);
+  }
+  return [];
+}
+
+// ─── HELPER: Get budget threshold for a term type ───────────────────────────
+function getThresholdForTerm(term, config) {
+  var t = (term || "").toLowerCase().trim();
+  if (t === "monthly")  return config.MONTHLY_BUDGET_LIMIT  ?? DEFAULT_CONFIG.MONTHLY_BUDGET_LIMIT;
+  if (t === "annual")   return config.ANNUAL_BUDGET_LIMIT   ?? DEFAULT_CONFIG.ANNUAL_BUDGET_LIMIT;
+  if (t === "lump sum" || t === "lumpsum" || t === "lump_sum")
     return config.LUMPSUM_BUDGET_LIMIT ?? DEFAULT_CONFIG.LUMPSUM_BUDGET_LIMIT;
-  // Default fallback to the most restrictive
   return config.MONTHLY_BUDGET_LIMIT ?? DEFAULT_CONFIG.MONTHLY_BUDGET_LIMIT;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// HELPER: Normalize user ID comparison (case-insensitive, trimmed)
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── HELPER: Compare user IDs (case-insensitive, trimmed) ───────────────────
 function sameUser(a, b) {
   if (!a || !b) return false;
   return String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
 }
 
+// ─── HELPER: Check if a user ID string is present and non-empty ─────────────
+function isAssigned(id) {
+  return id != null && String(id).trim() !== "";
+}
+
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // FUNCTION 1: getRequiredApprovers
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// PAYLOAD:
+// PAYLOAD (fields from your budget row):
 // {
-//   "submitterId":       "user-123",
-//   "budgetAmount":      75000,
-//   "termType":          "Annual",          // "Monthly" | "Annual" | "Lump Sum"
-//   "projectManagerId":  "user-456",        // null/empty if unassigned
-//   "entityManagerId":   "user-789",        // null/empty if unassigned
-//   "submitterRoles":    ["CEO"]            // global roles: ["CEO"], ["Accountant"], etc.
+//   "owner_id":             "SxPxchsmS.2tGPVdRPVHHg",
+//   "owner_roles":          "CEO" | ["CEO"] | "CEO, Accountant",
+//   "budget_total":         18600,
+//   "term":                 "Annual",
+//   "project_manager_id":   "IGDTvm71TuSnsezrMYyL5Q",
+//   "project_manager_name": "Diego Tobias",         // optional, for summary
+//   "entity_manager_id":    "IGDTvm71TuSnsezrMYyL5Q",
+//   "entity_manager_name":  "Diego Tobias"          // optional, for summary
 // }
 //
 // RETURNS:
 // {
-//   "autoApproved": false,
+//   "auto_approved": false,
 //   "steps": [
-//     { "step": 1, "role": "project_manager", "userId": "user-456", "status": "pending" },
-//     { "step": 2, "role": "entity_manager",  "userId": "user-789", "status": "pending" },
-//     { "step": 3, "role": "ceo",             "userId": null,       "status": "pending" }
+//     { "step": 1, "role": "project_manager", "user_id": "...", "user_name": "...", "status": "pending" },
+//     { "step": 2, "role": "entity_manager",  "user_id": "...", "user_name": "...", "status": "pending" },
+//     { "step": 3, "role": "ceo",             "user_id": null,  "user_name": null,  "status": "pending" }
 //   ],
-//   "ceoRequired": true,
-//   "ceoReason": "amount_exceeds_threshold",
+//   "ceo_required": true,
+//   "ceo_reason": "amount_exceeds_threshold",
 //   "threshold": 50000,
-//   "totalSteps": 3
+//   "total_steps": 3
 // }
 // ═══════════════════════════════════════════════════════════════════════════════
 function getRequiredApprovers(data, config) {
-  const {
-    submitterId,
-    budgetAmount = 0,
-    termType = "Monthly",
-    projectManagerId,
-    entityManagerId,
-    submitterRoles = []
-  } = data;
+  var ownerId   = data.owner_id;
+  var roles     = parseRoles(data.owner_roles);
+  var amount    = Number(data.budget_total) || 0;
+  var term      = data.term || "Monthly";
+  var pmId      = data.project_manager_id;
+  var pmName    = data.project_manager_name || null;
+  var emId      = data.entity_manager_id;
+  var emName    = data.entity_manager_name || null;
 
-  const roles = (submitterRoles || []).map(r => r.toLowerCase().trim());
-  const isCeo = roles.includes("ceo");
-
-  // CEO auto-approves
-  if (isCeo) {
+  // ── CEO auto-approves ──
+  if (roles.indexOf("ceo") !== -1) {
     return {
-      autoApproved: true,
+      auto_approved: true,
       steps: [],
-      ceoRequired: false,
-      ceoReason: "submitter_is_ceo",
+      ceo_required: false,
+      ceo_reason: "submitter_is_ceo",
       threshold: null,
-      totalSteps: 0
+      total_steps: 0
     };
   }
 
-  const steps = [];
-  let pmSkipped = false;
-  let emSkipped = false;
-  let ceoRequired = false;
-  let ceoReason = null;
+  var steps = [];
+  var pmSkipped = false;
+  var emSkipped = false;
+  var ceoRequired = false;
+  var ceoReason = null;
 
   // ── Step 1: Project Manager ──
-  const pmAssigned = projectManagerId && String(projectManagerId).trim() !== "";
-  const submitterIsPm = pmAssigned && sameUser(submitterId, projectManagerId);
-
-  if (pmAssigned && !submitterIsPm) {
+  if (isAssigned(pmId) && !sameUser(ownerId, pmId)) {
     steps.push({
       step: 1,
       role: "project_manager",
-      userId: projectManagerId,
+      user_id: pmId,
+      user_name: pmName,
       status: "pending"
     });
   } else {
@@ -138,16 +163,21 @@ function getRequiredApprovers(data, config) {
   }
 
   // ── Step 2: Entity Manager ──
-  const emAssigned = entityManagerId && String(entityManagerId).trim() !== "";
-  const submitterIsEm = emAssigned && sameUser(submitterId, entityManagerId);
-
-  if (emAssigned && !submitterIsEm) {
-    steps.push({
-      step: 2,
-      role: "entity_manager",
-      userId: entityManagerId,
-      status: "pending"
-    });
+  if (isAssigned(emId) && !sameUser(ownerId, emId)) {
+    // If PM and EM are the same person and PM was already added, skip EM
+    // to avoid requiring the same person to approve twice
+    var emAlreadyInChain = steps.some(function(s) { return sameUser(s.user_id, emId); });
+    if (!emAlreadyInChain) {
+      steps.push({
+        step: 2,
+        role: "entity_manager",
+        user_id: emId,
+        user_name: emName,
+        status: "pending"
+      });
+    } else {
+      emSkipped = true;
+    }
   } else {
     emSkipped = true;
   }
@@ -159,15 +189,12 @@ function getRequiredApprovers(data, config) {
   }
 
   // ── Threshold check ──
-  const threshold = getThresholdForTerm(termType, config);
-  if (budgetAmount > threshold) {
+  var threshold = getThresholdForTerm(term, config);
+  if (amount > threshold) {
     ceoRequired = true;
-    // Only override reason if not already set to a more specific one
-    if (!ceoReason) {
-      ceoReason = "amount_exceeds_threshold";
-    } else {
-      ceoReason = ceoReason + "+amount_exceeds_threshold";
-    }
+    ceoReason = ceoReason
+      ? ceoReason + "+amount_exceeds_threshold"
+      : "amount_exceeds_threshold";
   }
 
   // ── Add CEO step if required ──
@@ -175,23 +202,27 @@ function getRequiredApprovers(data, config) {
     steps.push({
       step: 3,
       role: "ceo",
-      userId: null,    // CEO user resolved at approval time
+      user_id: null,
+      user_name: null,
       status: "pending"
     });
   }
 
-  // Re-number steps sequentially (since skipping may leave gaps)
-  steps.forEach((s, i) => { s.step = i + 1; });
+  // Re-number steps sequentially
+  for (var i = 0; i < steps.length; i++) {
+    steps[i].step = i + 1;
+  }
 
   return {
-    autoApproved: false,
+    auto_approved: false,
     steps: steps,
-    ceoRequired: ceoRequired,
-    ceoReason: ceoReason,
+    ceo_required: ceoRequired,
+    ceo_reason: ceoReason,
     threshold: threshold,
-    totalSteps: steps.length
+    total_steps: steps.length
   };
 }
+
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // FUNCTION 2: canUserApprove
@@ -199,115 +230,103 @@ function getRequiredApprovers(data, config) {
 //
 // PAYLOAD:
 // {
-//   "approverId":        "user-456",
-//   "approverRoles":     ["CEO"],            // global roles
-//   "submitterId":       "user-123",
-//   "budgetApprovalStatus": "Review",        // current approval status
-//   "approvalSteps":     [...],              // from getRequiredApprovers
-//   "completedSteps":    [1],                // step numbers already completed
-//   "projectManagerId":  "user-456",
-//   "entityManagerId":   "user-789"
+//   "approver_id":          "IGDTvm71TuSnsezrMYyL5Q",
+//   "approver_roles":       "CEO" | ["CEO"],
+//   "owner_id":             "SxPxchsmS.2tGPVdRPVHHg",
+//   "approval_status":      "Review",
+//   "approval_steps":       [...],          // stored from getRequiredApprovers
+//   "completed_steps":      [1],            // step numbers already done
+//   "project_manager_id":   "IGDTvm71TuSnsezrMYyL5Q",
+//   "entity_manager_id":    "IGDTvm71TuSnsezrMYyL5Q"
 // }
 //
 // RETURNS:
 // {
-//   "canApprove": true,
+//   "can_approve": true,
 //   "reason": "user_is_next_approver",
-//   "stepNumber": 1,
+//   "step_number": 1,
 //   "role": "project_manager"
 // }
 // ═══════════════════════════════════════════════════════════════════════════════
 function canUserApprove(data) {
-  const {
-    approverId,
-    approverRoles = [],
-    submitterId,
-    budgetApprovalStatus,
-    approvalSteps = [],
-    completedSteps = [],
-    projectManagerId,
-    entityManagerId
-  } = data;
-
-  const roles = (approverRoles || []).map(r => r.toLowerCase().trim());
-  const isCeo = roles.includes("ceo");
-  const status = (budgetApprovalStatus || "").toLowerCase().trim();
+  var approverId     = data.approver_id;
+  var roles          = parseRoles(data.approver_roles);
+  var ownerId        = data.owner_id;
+  var status         = (data.approval_status || "").toLowerCase().trim();
+  var approvalSteps  = data.approval_steps || [];
+  var completedSteps = data.completed_steps || [];
+  var pmId           = data.project_manager_id;
+  var emId           = data.entity_manager_id;
+  var isCeo          = roles.indexOf("ceo") !== -1;
 
   // Budget must be in Review status
   if (status !== "review") {
-    return {
-      canApprove: false,
-      reason: "budget_not_in_review",
-      stepNumber: null,
-      role: null
-    };
+    return { can_approve: false, reason: "budget_not_in_review", step_number: null, role: null };
   }
 
-  // Submitter cannot approve their own budget (unless CEO)
-  if (sameUser(approverId, submitterId) && !isCeo) {
-    return {
-      canApprove: false,
-      reason: "cannot_approve_own_submission",
-      stepNumber: null,
-      role: null
-    };
+  // Submitter cannot approve own budget (unless CEO)
+  if (sameUser(approverId, ownerId) && !isCeo) {
+    return { can_approve: false, reason: "cannot_approve_own_submission", step_number: null, role: null };
   }
 
-  // CEO can always approve (override)
+  // CEO can always approve (override all remaining steps)
   if (isCeo) {
-    // Find the next pending step, or if all complete, they can still override
-    const nextPending = approvalSteps.find(s => !completedSteps.includes(s.step));
+    var nextForCeo = null;
+    for (var i = 0; i < approvalSteps.length; i++) {
+      if (completedSteps.indexOf(approvalSteps[i].step) === -1) {
+        nextForCeo = approvalSteps[i];
+        break;
+      }
+    }
     return {
-      canApprove: true,
+      can_approve: true,
       reason: "ceo_override",
-      stepNumber: nextPending ? nextPending.step : null,
+      step_number: nextForCeo ? nextForCeo.step : null,
       role: "ceo"
     };
   }
 
-  // Find which role this approver fulfills
-  let approverRole = null;
-  if (sameUser(approverId, projectManagerId)) approverRole = "project_manager";
-  if (sameUser(approverId, entityManagerId))  approverRole = "entity_manager";
+  // Determine which approval roles this user fulfills (can be multiple)
+  var approverRolesList = [];
+  if (sameUser(approverId, pmId)) approverRolesList.push("project_manager");
+  if (sameUser(approverId, emId)) approverRolesList.push("entity_manager");
 
-  if (!approverRole) {
-    return {
-      canApprove: false,
-      reason: "user_has_no_approval_role",
-      stepNumber: null,
-      role: null
-    };
+  if (approverRolesList.length === 0) {
+    return { can_approve: false, reason: "user_has_no_approval_role", step_number: null, role: null };
   }
 
   // Find the next pending step
-  const nextPending = approvalSteps.find(s => !completedSteps.includes(s.step));
-  if (!nextPending) {
-    return {
-      canApprove: false,
-      reason: "all_steps_complete",
-      stepNumber: null,
-      role: approverRole
-    };
+  var nextPending = null;
+  for (var j = 0; j < approvalSteps.length; j++) {
+    if (completedSteps.indexOf(approvalSteps[j].step) === -1) {
+      nextPending = approvalSteps[j];
+      break;
+    }
   }
 
-  // Check if this user's role matches the next pending step
-  if (nextPending.role === approverRole) {
+  if (!nextPending) {
+    return { can_approve: false, reason: "all_steps_complete", step_number: null, role: approverRolesList[0] };
+  }
+
+  // Check if ANY of this user's roles match the next pending step
+  if (approverRolesList.indexOf(nextPending.role) !== -1) {
     return {
-      canApprove: true,
+      can_approve: true,
       reason: "user_is_next_approver",
-      stepNumber: nextPending.step,
-      role: approverRole
+      step_number: nextPending.step,
+      role: nextPending.role
     };
   }
 
   return {
-    canApprove: false,
+    can_approve: false,
     reason: "not_your_turn",
-    stepNumber: nextPending.step,
-    role: approverRole,
-    waitingFor: nextPending.role
+    step_number: nextPending.step,
+    role: approverRolesList[0],
+    waiting_for: nextPending.role
   };
 }
+
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // FUNCTION 3: getApprovalStatus
@@ -315,68 +334,71 @@ function canUserApprove(data) {
 //
 // PAYLOAD:
 // {
-//   "approvalSteps":     [...],             // from getRequiredApprovers
-//   "completedSteps":    [1, 2],            // step numbers completed
-//   "rejectedStep":      null,              // step number if rejected, else null
-//   "autoApproved":      false
+//   "approval_steps":   [...],
+//   "completed_steps":  [1, 2],
+//   "rejected_step":    null,        // step number if rejected, else null
+//   "auto_approved":    false
 // }
 //
 // RETURNS:
 // {
-//   "overallStatus": "approved",            // "pending" | "approved" | "rejected" | "auto_approved"
-//   "progress":      "2/2",
-//   "percentComplete": 100,
-//   "pendingSteps":  [],
-//   "completedSteps": [{ step: 1, role: "project_manager" }, ...],
-//   "isComplete": true
+//   "overall_status":   "approved",  // "pending"|"approved"|"rejected"|"auto_approved"
+//   "progress":         "2/2",
+//   "percent_complete":  100,
+//   "pending_steps":    [],
+//   "completed_steps":  [...],
+//   "is_complete":      true
 // }
 // ═══════════════════════════════════════════════════════════════════════════════
 function getApprovalStatus(data) {
-  const {
-    approvalSteps = [],
-    completedSteps = [],
-    rejectedStep = null,
-    autoApproved = false
-  } = data;
+  var approvalSteps  = data.approval_steps || [];
+  var completedSteps = data.completed_steps || [];
+  var rejectedStep   = data.rejected_step;
+  var autoApproved   = data.auto_approved || false;
 
   if (autoApproved) {
     return {
-      overallStatus: "auto_approved",
+      overall_status: "auto_approved",
       progress: "0/0",
-      percentComplete: 100,
-      pendingSteps: [],
-      completedSteps: [],
-      isComplete: true
+      percent_complete: 100,
+      pending_steps: [],
+      completed_steps: [],
+      is_complete: true
     };
   }
 
-  if (rejectedStep !== null && rejectedStep !== undefined) {
-    const rejStep = approvalSteps.find(s => s.step === rejectedStep);
+  var total = approvalSteps.length;
+
+  if (rejectedStep != null) {
+    var rejStepObj = null;
+    for (var i = 0; i < approvalSteps.length; i++) {
+      if (approvalSteps[i].step === rejectedStep) { rejStepObj = approvalSteps[i]; break; }
+    }
     return {
-      overallStatus: "rejected",
-      progress: (completedSteps.length) + "/" + approvalSteps.length,
-      percentComplete: Math.round((completedSteps.length / Math.max(approvalSteps.length, 1)) * 100),
-      pendingSteps: [],
-      completedSteps: approvalSteps.filter(s => completedSteps.includes(s.step)),
-      rejectedAt: rejStep || { step: rejectedStep },
-      isComplete: true
+      overall_status: "rejected",
+      progress: completedSteps.length + "/" + total,
+      percent_complete: total > 0 ? Math.round((completedSteps.length / total) * 100) : 0,
+      pending_steps: [],
+      completed_steps: approvalSteps.filter(function(s) { return completedSteps.indexOf(s.step) !== -1; }),
+      rejected_at: rejStepObj || { step: rejectedStep },
+      is_complete: true
     };
   }
 
-  const pending = approvalSteps.filter(s => !completedSteps.includes(s.step));
-  const completed = approvalSteps.filter(s => completedSteps.includes(s.step));
-  const totalSteps = approvalSteps.length;
-  const isComplete = pending.length === 0 && totalSteps > 0;
+  var pending = approvalSteps.filter(function(s) { return completedSteps.indexOf(s.step) === -1; });
+  var completed = approvalSteps.filter(function(s) { return completedSteps.indexOf(s.step) !== -1; });
+  var isComplete = pending.length === 0 && total > 0;
 
   return {
-    overallStatus: isComplete ? "approved" : "pending",
-    progress: completedSteps.length + "/" + totalSteps,
-    percentComplete: totalSteps > 0 ? Math.round((completedSteps.length / totalSteps) * 100) : 0,
-    pendingSteps: pending,
-    completedSteps: completed,
-    isComplete: isComplete
+    overall_status: isComplete ? "approved" : "pending",
+    progress: completedSteps.length + "/" + total,
+    percent_complete: total > 0 ? Math.round((completedSteps.length / total) * 100) : 0,
+    pending_steps: pending,
+    completed_steps: completed,
+    is_complete: isComplete
   };
 }
+
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // FUNCTION 4: getNextPendingStep
@@ -384,47 +406,59 @@ function getApprovalStatus(data) {
 //
 // PAYLOAD:
 // {
-//   "approvalSteps":  [...],
-//   "completedSteps": [1]
+//   "approval_steps":  [...],
+//   "completed_steps": [1]
 // }
 //
 // RETURNS:
 // {
-//   "hasNext": true,
+//   "has_next": true,
 //   "step": 2,
 //   "role": "entity_manager",
-//   "userId": "user-789",
-//   "displayLabel": "Entity Manager"
+//   "user_id": "...",
+//   "user_name": "Diego Tobias",
+//   "display_label": "Entity Manager"
 // }
 // ═══════════════════════════════════════════════════════════════════════════════
 function getNextPendingStep(data) {
-  const { approvalSteps = [], completedSteps = [] } = data;
+  var approvalSteps  = data.approval_steps || [];
+  var completedSteps = data.completed_steps || [];
 
-  const ROLE_LABELS = {
+  var ROLE_LABELS = {
     "project_manager": "Project Manager",
     "entity_manager": "Entity Manager",
     "ceo": "CEO"
   };
 
-  const next = approvalSteps.find(s => !completedSteps.includes(s.step));
+  var next = null;
+  for (var i = 0; i < approvalSteps.length; i++) {
+    if (completedSteps.indexOf(approvalSteps[i].step) === -1) {
+      next = approvalSteps[i];
+      break;
+    }
+  }
+
   if (!next) {
     return {
-      hasNext: false,
+      has_next: false,
       step: null,
       role: null,
-      userId: null,
-      displayLabel: "All approvals complete"
+      user_id: null,
+      user_name: null,
+      display_label: "All approvals complete"
     };
   }
 
   return {
-    hasNext: true,
+    has_next: true,
     step: next.step,
     role: next.role,
-    userId: next.userId,
-    displayLabel: ROLE_LABELS[next.role] || next.role
+    user_id: next.user_id,
+    user_name: next.user_name || null,
+    display_label: ROLE_LABELS[next.role] || next.role
   };
 }
+
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // FUNCTION 5: validateSubmission
@@ -432,80 +466,62 @@ function getNextPendingStep(data) {
 //
 // PAYLOAD:
 // {
-//   "budgetApprovalStatus": "Draft",
-//   "budgetAmount":         50000,
-//   "termType":             "Annual",
-//   "hasCategories":        true,
-//   "submitterId":          "user-123",
-//   "submitterRoles":       ["Accountant"]
+//   "approval_status":  "Draft",
+//   "budget_total":     18600,
+//   "term":             "Annual",
+//   "category_count":   2,            // number of categories (0 = none)
+//   "owner_id":         "SxPxchsmS.2tGPVdRPVHHg",
+//   "owner_roles":      "CEO"
 // }
 //
 // RETURNS:
 // {
-//   "canSubmit": true,
+//   "can_submit": true,
 //   "errors": [],
-//   "warnings": ["Budget amount exceeds Annual threshold — CEO approval will be required"]
+//   "warnings": ["Budget exceeds Annual threshold ($50,000). CEO approval required."]
 // }
 // ═══════════════════════════════════════════════════════════════════════════════
 function validateSubmission(data, config) {
-  const {
-    budgetApprovalStatus,
-    budgetAmount = 0,
-    termType = "Monthly",
-    hasCategories = false,
-    submitterId,
-    submitterRoles = []
-  } = data;
+  var status   = (data.approval_status || "").toLowerCase().trim();
+  var amount   = Number(data.budget_total) || 0;
+  var term     = data.term || "Monthly";
+  var catCount = Number(data.category_count) || 0;
+  var roles    = parseRoles(data.owner_roles);
 
-  const errors = [];
-  const warnings = [];
-  const status = (budgetApprovalStatus || "").toLowerCase().trim();
-  const roles = (submitterRoles || []).map(r => r.toLowerCase().trim());
+  var errors   = [];
+  var warnings = [];
 
-  // Must be in Draft status to submit
   if (status !== "draft") {
-    errors.push("Budget must be in Draft status to submit for review. Current status: " + budgetApprovalStatus);
+    errors.push("Budget must be in Draft status to submit. Current: " + data.approval_status);
+  }
+  if (amount <= 0) {
+    errors.push("Budget total must be greater than zero.");
+  }
+  if (catCount < 1) {
+    errors.push("Budget must have at least one category.");
   }
 
-  // Must have a positive amount
-  if (!budgetAmount || budgetAmount <= 0) {
-    errors.push("Budget amount must be greater than zero.");
+  var validTerms = ["monthly", "annual", "lump sum", "lumpsum", "lump_sum"];
+  if (validTerms.indexOf(term.toLowerCase().trim()) === -1) {
+    errors.push("Invalid budget term: " + term);
   }
 
-  // Must have at least one category
-  if (!hasCategories) {
-    errors.push("Budget must have at least one category with subcategories.");
-  }
-
-  // Accountant cannot submit for review
-  if (roles.includes("accountant") && !roles.includes("ceo")) {
-    // Actually the Accountant CAN submit if they're a Budget Owner —
-    // this check is more nuanced in Glide. Leave a warning.
-    // Per the Permission Matrix, Budget Owner can submit.
-    // Accountant alone cannot submit.
-  }
-
-  // Term type must be valid
-  const validTerms = ["monthly", "annual", "lump sum", "lumpsum", "lump_sum"];
-  if (!validTerms.includes((termType || "").toLowerCase().trim())) {
-    errors.push("Invalid budget term type: " + termType);
-  }
-
-  // Warning: amount exceeds threshold
-  const threshold = getThresholdForTerm(termType, config);
-  if (budgetAmount > threshold) {
+  var threshold = getThresholdForTerm(term, config);
+  if (amount > threshold) {
     warnings.push(
-      "Budget amount ($" + budgetAmount.toLocaleString() + ") exceeds the " +
-      termType + " threshold ($" + threshold.toLocaleString() + "). CEO approval will be required."
+      "Budget total ($" + amount.toLocaleString() +
+      ") exceeds " + term + " threshold ($" + threshold.toLocaleString() +
+      "). CEO approval will be required."
     );
   }
 
   return {
-    canSubmit: errors.length === 0,
+    can_submit: errors.length === 0,
     errors: errors,
     warnings: warnings
   };
 }
+
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // FUNCTION 6: isCeoRequired
@@ -513,52 +529,48 @@ function validateSubmission(data, config) {
 //
 // PAYLOAD:
 // {
-//   "budgetAmount":     75000,
-//   "termType":         "Annual",
-//   "submitterId":      "user-123",
-//   "projectManagerId": "user-123",   // submitter IS the PM
-//   "entityManagerId":  "user-123"    // submitter IS ALSO the EM
+//   "budget_total":         18600,
+//   "term":                 "Annual",
+//   "owner_id":             "SxPxchsmS.2tGPVdRPVHHg",
+//   "project_manager_id":   "IGDTvm71TuSnsezrMYyL5Q",
+//   "entity_manager_id":    "IGDTvm71TuSnsezrMYyL5Q"
 // }
 //
 // RETURNS:
 // {
-//   "ceoRequired": true,
-//   "reasons": ["both_steps_skipped", "amount_exceeds_threshold"]
+//   "ceo_required": true,
+//   "reasons": ["both_steps_skipped"],
+//   "threshold": 50000
 // }
 // ═══════════════════════════════════════════════════════════════════════════════
 function isCeoRequired(data, config) {
-  const {
-    budgetAmount = 0,
-    termType = "Monthly",
-    submitterId,
-    projectManagerId,
-    entityManagerId
-  } = data;
+  var amount = Number(data.budget_total) || 0;
+  var term   = data.term || "Monthly";
+  var owner  = data.owner_id;
+  var pmId   = data.project_manager_id;
+  var emId   = data.entity_manager_id;
 
-  const reasons = [];
+  var reasons = [];
 
-  // Check PM/EM skip
-  const pmAssigned = projectManagerId && String(projectManagerId).trim() !== "";
-  const emAssigned = entityManagerId && String(entityManagerId).trim() !== "";
-  const pmSkipped = !pmAssigned || sameUser(submitterId, projectManagerId);
-  const emSkipped = !emAssigned || sameUser(submitterId, entityManagerId);
+  var pmSkipped = !isAssigned(pmId) || sameUser(owner, pmId);
+  var emSkipped = !isAssigned(emId) || sameUser(owner, emId);
 
   if (pmSkipped && emSkipped) {
     reasons.push("both_steps_skipped");
   }
 
-  // Check threshold
-  const threshold = getThresholdForTerm(termType, config);
-  if (budgetAmount > threshold) {
+  var threshold = getThresholdForTerm(term, config);
+  if (amount > threshold) {
     reasons.push("amount_exceeds_threshold");
   }
 
   return {
-    ceoRequired: reasons.length > 0,
+    ceo_required: reasons.length > 0,
     reasons: reasons,
     threshold: threshold
   };
 }
+
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // FUNCTION 7: getApprovalChainSummary
@@ -568,46 +580,43 @@ function isCeoRequired(data, config) {
 //
 // RETURNS:
 // {
-//   "summary": "PM (John) → Entity Mgr (Jane) → CEO",
-//   "shortSummary": "3-step approval",
-//   "stepLabels": ["Project Manager", "Entity Manager", "CEO"]
+//   "summary": "Project Manager (Diego Tobias) → CEO",
+//   "short_summary": "2-step approval",
+//   "step_labels": ["Project Manager (Diego Tobias)", "CEO"]
 // }
 // ═══════════════════════════════════════════════════════════════════════════════
 function getApprovalChainSummary(data, config) {
-  const result = getRequiredApprovers(data, config);
+  var result = getRequiredApprovers(data, config);
 
-  if (result.autoApproved) {
+  if (result.auto_approved) {
     return {
       summary: "Auto-approved (CEO submission)",
-      shortSummary: "Auto-approved",
-      stepLabels: []
+      short_summary: "Auto-approved",
+      step_labels: []
     };
   }
 
-  const ROLE_LABELS = {
+  var ROLE_LABELS = {
     "project_manager": "Project Manager",
     "entity_manager": "Entity Manager",
     "ceo": "CEO"
   };
 
-  // Use display names from payload if provided
-  const nameMap = data.displayNames || {};
-
-  const labels = result.steps.map(s => {
-    const label = ROLE_LABELS[s.role] || s.role;
-    const name = nameMap[s.role] || nameMap[s.userId] || "";
+  var labels = result.steps.map(function(s) {
+    var label = ROLE_LABELS[s.role] || s.role;
+    var name = s.user_name || "";
     return name ? label + " (" + name + ")" : label;
   });
 
-  const totalSteps = result.steps.length;
-  const suffix = totalSteps === 1 ? "1-step approval" : totalSteps + "-step approval";
+  var n = result.steps.length;
+  var shortLabel = n === 1 ? "1-step approval" : n + "-step approval";
 
   return {
     summary: labels.join(" → "),
-    shortSummary: suffix,
-    stepLabels: labels,
-    ceoRequired: result.ceoRequired,
-    ceoReason: result.ceoReason
+    short_summary: shortLabel,
+    step_labels: labels,
+    ceo_required: result.ceo_required,
+    ceo_reason: result.ceo_reason
   };
 }
 
@@ -616,17 +625,18 @@ function getApprovalChainSummary(data, config) {
 // MAIN ENTRY POINT — ROUTER
 // ═══════════════════════════════════════════════════════════════════════════════
 window.function = function (functionName, payload, config) {
-  const fn = (functionName.value ?? "").trim();
-  const data = safeParse(payload.value ?? "");
-  const cfg = safeParse(config.value ?? "") || {};
+  var fn   = (functionName.value ?? "").trim();
+  var data = safeParse(payload.value ?? "");
+  var cfg  = safeParse(config.value ?? "") || {};
 
-  // Merge config with defaults
-  const mergedConfig = { ...DEFAULT_CONFIG, ...cfg };
+  var mergedConfig = {};
+  for (var k in DEFAULT_CONFIG) { mergedConfig[k] = DEFAULT_CONFIG[k]; }
+  for (var k2 in cfg) { mergedConfig[k2] = cfg[k2]; }
 
   if (!fn) return JSON.stringify({ error: "No function name provided" });
   if (!data) return JSON.stringify({ error: "Invalid or missing JSON payload" });
 
-  let result;
+  var result;
 
   switch (fn) {
     case "getRequiredApprovers":
@@ -653,7 +663,7 @@ window.function = function (functionName, payload, config) {
     default:
       result = {
         error: "Unknown function: " + fn,
-        availableFunctions: [
+        available_functions: [
           "getRequiredApprovers",
           "canUserApprove",
           "getApprovalStatus",
