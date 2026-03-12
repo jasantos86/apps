@@ -20,8 +20,8 @@
 //
 // ─── ROLES FORMAT ────────────────────────────────────────────────────────────
 // owner_roles / approver_roles accepts EITHER:
-//   • Comma-separated string:  "CEO, Accountant"
-//   • JSON array of strings:   ["CEO", "Accountant"]
+//   • Comma-separated string:  "tre.auth.ceo, Accountant"
+//   • JSON array of strings:   ["tre.auth.ceo", "Accountant"]
 //
 // ─── AVAILABLE FUNCTIONS ─────────────────────────────────────────────────────
 //   1. getRequiredApprovers    — Full approval chain for a budget
@@ -34,6 +34,9 @@
 //
 // ═══════════════════════════════════════════════════════════════════════════════
 
+
+// ─── ROLE CONSTANTS ───────────────────────────────────────────────────────────
+var CEO_ROLE = "tre.auth.ceo";
 
 // ─── DEFAULT CONFIGURATION ──────────────────────────────────────────────────
 const DEFAULT_CONFIG = {
@@ -50,8 +53,8 @@ function safeParse(str) {
 }
 
 // ─── HELPER: Normalize roles input ──────────────────────────────────────────
-// Accepts: "CEO, Accountant" OR ["CEO","Accountant"] OR "CEO" OR ["CEO"]
-// Returns: ["ceo", "accountant"]  (lowercase, trimmed array)
+// Accepts: "tre.auth.ceo, Accountant" OR ["tre.auth.ceo","Accountant"] OR "tre.auth.ceo"
+// Returns: ["tre.auth.ceo", "accountant"]  (lowercase, trimmed array)
 function parseRoles(input) {
   if (!input) return [];
   if (Array.isArray(input)) {
@@ -98,7 +101,7 @@ function isAssigned(id) {
 // PAYLOAD (fields from your budget row):
 // {
 //   "owner_id":             "SxPxchsmS.2tGPVdRPVHHg",
-//   "owner_roles":          "CEO" | ["CEO"] | "CEO, Accountant",
+//   "owner_roles":          "tre.auth.ceo" | ["tre.auth.ceo"] | "tre.auth.ceo, Accountant",
 //   "budget_total":         18600,
 //   "term":                 "Annual",
 //   "project_manager_id":   "IGDTvm71TuSnsezrMYyL5Q",
@@ -113,7 +116,7 @@ function isAssigned(id) {
 //   "steps": [
 //     { "step": 1, "role": "project_manager", "user_id": "...", "user_name": "...", "status": "pending" },
 //     { "step": 2, "role": "entity_manager",  "user_id": "...", "user_name": "...", "status": "pending" },
-//     { "step": 3, "role": "ceo",             "user_id": null,  "user_name": null,  "status": "pending" }
+//     { "step": 3, "role": "tre.auth.ceo",     "user_id": null,  "user_name": null,  "status": "pending" }
 //   ],
 //   "ceo_required": true,
 //   "ceo_reason": "amount_exceeds_threshold",
@@ -132,7 +135,7 @@ function getRequiredApprovers(data, config) {
   var emName    = data.entity_manager_name || null;
 
   // ── CEO auto-approves ──
-  if (roles.indexOf("ceo") !== -1) {
+  if (roles.indexOf(CEO_ROLE) !== -1) {
     return {
       auto_approved: true,
       steps: [],
@@ -201,7 +204,7 @@ function getRequiredApprovers(data, config) {
   if (ceoRequired) {
     steps.push({
       step: 3,
-      role: "ceo",
+      role: CEO_ROLE,
       user_id: null,
       user_name: null,
       status: "pending"
@@ -231,7 +234,7 @@ function getRequiredApprovers(data, config) {
 // PAYLOAD:
 // {
 //   "approver_id":          "IGDTvm71TuSnsezrMYyL5Q",
-//   "approver_roles":       "CEO" | ["CEO"],
+//   "approver_roles":       "tre.auth.ceo" | ["tre.auth.ceo"],
 //   "owner_id":             "SxPxchsmS.2tGPVdRPVHHg",
 //   "approval_status":      "Review",
 //   "approval_steps":       [...],          // stored from getRequiredApprovers
@@ -257,7 +260,7 @@ function canUserApprove(data) {
   var completedSteps = data.completed_steps || [];
   var pmId           = data.project_manager_id;
   var emId           = data.entity_manager_id;
-  var isCeo          = roles.indexOf("ceo") !== -1;
+  var isCeo          = roles.indexOf(CEO_ROLE) !== -1;
 
   // Budget must be in Review status
   if (status !== "review") {
@@ -282,7 +285,7 @@ function canUserApprove(data) {
       can_approve: true,
       reason: "ceo_override",
       step_number: nextForCeo ? nextForCeo.step : null,
-      role: "ceo"
+      role: CEO_ROLE
     };
   }
 
@@ -426,9 +429,9 @@ function getNextPendingStep(data) {
 
   var ROLE_LABELS = {
     "project_manager": "Project Manager",
-    "entity_manager": "Entity Manager",
-    "ceo": "CEO"
+    "entity_manager": "Entity Manager"
   };
+  ROLE_LABELS[CEO_ROLE] = "CEO";
 
   var next = null;
   for (var i = 0; i < approvalSteps.length; i++) {
@@ -471,7 +474,7 @@ function getNextPendingStep(data) {
 //   "term":             "Annual",
 //   "category_count":   2,            // number of categories (0 = none)
 //   "owner_id":         "SxPxchsmS.2tGPVdRPVHHg",
-//   "owner_roles":      "CEO"
+//   "owner_roles":      "tre.auth.ceo"
 // }
 //
 // RETURNS:
@@ -598,9 +601,9 @@ function getApprovalChainSummary(data, config) {
 
   var ROLE_LABELS = {
     "project_manager": "Project Manager",
-    "entity_manager": "Entity Manager",
-    "ceo": "CEO"
+    "entity_manager": "Entity Manager"
   };
+  ROLE_LABELS[CEO_ROLE] = "CEO";
 
   var labels = result.steps.map(function(s) {
     var label = ROLE_LABELS[s.role] || s.role;
