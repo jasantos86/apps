@@ -31,6 +31,8 @@
 //   5. validateSubmission      — Pre-submit validation with errors/warnings
 //   6. isCeoRequired           — Quick boolean check
 //   7. getApprovalChainSummary — Human-readable chain for display
+//   8. canUserEditBudget       — Can the active user edit this budget?
+//   9. canUserDeleteBudget     — Can the active user delete this budget?
 //
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -625,6 +627,129 @@ function getApprovalChainSummary(data, config) {
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// FUNCTION 8: canUserEditBudget
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// Determines whether the active user can edit a budget.
+// Only budgets in Draft status are editable, and only by:
+//   • Owner (budget submitter)
+//   • Responsible
+//   • Project Manager
+//   • Entity Manager
+//   • CEO (tre.auth.ceo role)
+//
+// PAYLOAD:  Budget row JSON + active user fields
+//   Pass the full budget row JSON and append "user_id" and "user_roles".
+//   The function reads: owner_id, responsible_id, project_manager_id,
+//   entity_manager_id, approval_status directly from the budget row.
+//
+// {
+//   "user_id":    "«Signed-In User RowID»",
+//   "user_roles": "«Signed-In User Roles»",
+//   ... all budget row fields (id, title, owner_id, responsible_id, etc.) ...
+// }
+//
+// RETURNS:
+// {
+//   "can_edit": true,
+//   "reason": "user_is_project_manager"
+//                   // possible reasons: user_is_ceo, user_is_owner,
+//                   //   user_is_responsible, user_is_project_manager,
+//                   //   user_is_entity_manager, no_permission,
+//                   //   budget_not_in_draft, no_user_id
+// }
+// ═══════════════════════════════════════════════════════════════════════════════
+function canUserEditBudget(data) {
+  var userId = data.user_id;
+  var roles  = parseRoles(data.user_roles);
+  var status = (data.approval_status || "").toLowerCase().trim();
+
+  // Only Draft budgets are editable
+  if (status !== "draft") {
+    return { can_edit: false, reason: "budget_not_in_draft" };
+  }
+
+  if (!userId) {
+    return { can_edit: false, reason: "no_user_id" };
+  }
+
+  // CEO can always edit
+  if (roles.indexOf(CEO_ROLE) !== -1) {
+    return { can_edit: true, reason: "user_is_ceo" };
+  }
+
+  // Owner
+  if (sameUser(userId, data.owner_id)) {
+    return { can_edit: true, reason: "user_is_owner" };
+  }
+
+  // Responsible
+  if (sameUser(userId, data.responsible_id)) {
+    return { can_edit: true, reason: "user_is_responsible" };
+  }
+
+  // Project Manager
+  if (sameUser(userId, data.project_manager_id)) {
+    return { can_edit: true, reason: "user_is_project_manager" };
+  }
+
+  // Entity Manager
+  if (sameUser(userId, data.entity_manager_id)) {
+    return { can_edit: true, reason: "user_is_entity_manager" };
+  }
+
+  return { can_edit: false, reason: "no_permission" };
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FUNCTION 9: canUserDeleteBudget
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// Determines whether the active user can delete a budget.
+// Only the Owner and the CEO can delete a budget.
+//
+// PAYLOAD:  Budget row JSON + active user fields
+//   Pass the full budget row JSON and append "user_id" and "user_roles".
+//   The function reads: owner_id directly from the budget row.
+//
+// {
+//   "user_id":    "«Signed-In User RowID»",
+//   "user_roles": "«Signed-In User Roles»",
+//   ... all budget row fields (id, title, owner_id, etc.) ...
+// }
+//
+// RETURNS:
+// {
+//   "can_delete": true,
+//   "reason": "user_is_owner"
+//                   // possible reasons: user_is_ceo, user_is_owner,
+//                   //   no_permission, no_user_id
+// }
+// ═══════════════════════════════════════════════════════════════════════════════
+function canUserDeleteBudget(data) {
+  var userId = data.user_id;
+  var roles  = parseRoles(data.user_roles);
+
+  if (!userId) {
+    return { can_delete: false, reason: "no_user_id" };
+  }
+
+  // CEO can always delete
+  if (roles.indexOf(CEO_ROLE) !== -1) {
+    return { can_delete: true, reason: "user_is_ceo" };
+  }
+
+  // Owner
+  if (sameUser(userId, data.owner_id)) {
+    return { can_delete: true, reason: "user_is_owner" };
+  }
+
+  return { can_delete: false, reason: "no_permission" };
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // MAIN ENTRY POINT — ROUTER
 // ═══════════════════════════════════════════════════════════════════════════════
 window.function = function (functionName, payload, config) {
@@ -663,6 +788,12 @@ window.function = function (functionName, payload, config) {
     case "getApprovalChainSummary":
       result = getApprovalChainSummary(data, mergedConfig);
       break;
+    case "canUserEditBudget":
+      result = canUserEditBudget(data);
+      break;
+    case "canUserDeleteBudget":
+      result = canUserDeleteBudget(data);
+      break;
     default:
       result = {
         error: "Unknown function: " + fn,
@@ -673,7 +804,9 @@ window.function = function (functionName, payload, config) {
           "getNextPendingStep",
           "validateSubmission",
           "isCeoRequired",
-          "getApprovalChainSummary"
+          "getApprovalChainSummary",
+          "canUserEditBudget",
+          "canUserDeleteBudget"
         ]
       };
   }
