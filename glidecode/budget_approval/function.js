@@ -54,6 +54,16 @@ function safeParse(str) {
   catch (e) { return null; }
 }
 
+// ─── HELPER: Ensure value is an array (parse if string) ─────────────────────
+function ensureArray(val) {
+  if (Array.isArray(val)) return val;
+  if (typeof val === "string" && val.trim()) {
+    try { var parsed = JSON.parse(val); if (Array.isArray(parsed)) return parsed; }
+    catch (e) { /* not valid JSON */ }
+  }
+  return [];
+}
+
 // ─── HELPER: Normalize roles input ──────────────────────────────────────────
 // Accepts: "tre.auth.ceo, Accountant" OR ["tre.auth.ceo","Accountant"] OR "tre.auth.ceo"
 // Returns: ["tre.auth.ceo", "accountant"]  (lowercase, trimmed array)
@@ -258,8 +268,8 @@ function canUserApprove(data) {
   var roles          = parseRoles(data.approver_roles);
   var ownerId        = data.owner_id;
   var status         = (data.approval_status || "").toLowerCase().trim();
-  var approvalSteps  = data.approval_steps || [];
-  var completedSteps = data.completed_steps || [];
+  var approvalSteps  = ensureArray(data.approval_steps);
+  var completedSteps = ensureArray(data.completed_steps);
   var pmId           = data.project_manager_id;
   var emId           = data.entity_manager_id;
   var isCeo          = roles.indexOf(CEO_ROLE) !== -1;
@@ -356,8 +366,8 @@ function canUserApprove(data) {
 // }
 // ═══════════════════════════════════════════════════════════════════════════════
 function getApprovalStatus(data) {
-  var approvalSteps  = data.approval_steps || [];
-  var completedSteps = data.completed_steps || [];
+  var approvalSteps  = ensureArray(data.approval_steps);
+  var completedSteps = ensureArray(data.completed_steps);
   var rejectedStep   = data.rejected_step;
   var autoApproved   = data.auto_approved || false;
 
@@ -426,8 +436,8 @@ function getApprovalStatus(data) {
 // }
 // ═══════════════════════════════════════════════════════════════════════════════
 function getNextPendingStep(data) {
-  var approvalSteps  = data.approval_steps || [];
-  var completedSteps = data.completed_steps || [];
+  var approvalSteps  = ensureArray(data.approval_steps);
+  var completedSteps = ensureArray(data.completed_steps);
 
   var ROLE_LABELS = {
     "project_manager": "Project Manager",
