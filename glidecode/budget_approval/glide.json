@@ -2,7 +2,7 @@
   {
     "kind": "column",
     "name": "Budget Approval Engine",
-    "description": "Multi-function budget authorization engine. Pass a function name and a JSON payload to compute approval chains, validate approvers, determine next steps, and check permissions. Functions: getRequiredApprovers, canUserApprove, getApprovalStatus, validateSubmission, getNextPendingStep, isCeoRequired.",
+    "description": "Multi-function budget authorization engine. Pass a function name, JSON payload, and optional config JSON. Returns a JSON string.\n\nConsolidated functions (5):\n• getApprovalChain — Full approval chain + CEO check + display summary. Input: budget row with owner_roles.\n• canUserApprove — Can the signed-in user approve at this step? Input: approver_id, approver_roles, budget row fields, approval_steps, completed_steps.\n• getApprovalProgress — Workflow status + progress + next pending step. Input: approval_steps, completed_steps, rejected_step, auto_approved.\n• validateSubmission — Pre-submit validation (errors/warnings). Input: budget row fields + category_count + owner_roles.\n• getUserPermissions — Can the signed-in user edit/delete this budget? Input: budget row + user_id, user_roles.\n\nLegacy aliases still supported: getRequiredApprovers, isCeoRequired, getApprovalChainSummary, getApprovalStatus, getNextPendingStep, canUserEditBudget, canUserDeleteBudget.",
     "author": "JAS",
     "params": [
       {

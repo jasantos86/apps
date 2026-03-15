@@ -23,16 +23,16 @@
 //   • Comma-separated string:  "tre.auth.ceo, Accountant"
 //   • JSON array of strings:   ["tre.auth.ceo", "Accountant"]
 //
-// ─── AVAILABLE FUNCTIONS ─────────────────────────────────────────────────────
-//   1. getRequiredApprovers    — Full approval chain for a budget
-//   2. canUserApprove          — Can a specific user approve at this step?
-//   3. getApprovalStatus       — Current workflow state (progress, %)
-//   4. getNextPendingStep      — Who needs to act next?
-//   5. validateSubmission      — Pre-submit validation with errors/warnings
-//   6. isCeoRequired           — Quick boolean check
-//   7. getApprovalChainSummary — Human-readable chain for display
-//   8. canUserEditBudget       — Can the active user edit this budget?
-//   9. canUserDeleteBudget     — Can the active user delete this budget?
+// ─── AVAILABLE FUNCTIONS (5 consolidated) ─────────────────────────────────────
+//   1. getApprovalChain     — Full chain + CEO check + human-readable summary
+//   2. canUserApprove       — Can a specific user approve at this step?
+//   3. getApprovalProgress  — Workflow state + progress + next pending step
+//   4. validateSubmission   — Pre-submit validation with errors/warnings
+//   5. getUserPermissions   — Can the active user edit / delete this budget?
+//
+// Legacy aliases (still supported for backward compatibility):
+//   getRequiredApprovers, isCeoRequired, getApprovalChainSummary,
+//   getApprovalStatus, getNextPendingStep, canUserEditBudget, canUserDeleteBudget
 //
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -529,223 +529,212 @@ function validateSubmission(data, config) {
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// FUNCTION 6: isCeoRequired
+// CONSOLIDATED FUNCTION 1: getApprovalChain
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// PAYLOAD:
+// Merges: getRequiredApprovers + isCeoRequired + getApprovalChainSummary
+// Single call returns the full chain, CEO analysis, and display summary.
+//
+// PAYLOAD:  Budget row JSON (+ owner_roles)
 // {
+//   "owner_id":             "SxPxchsmS.2tGPVdRPVHHg",
+//   "owner_roles":          "tre.auth.ceo" | ["tre.auth.ceo", "Accountant"],
 //   "budget_total":         18600,
 //   "term":                 "Annual",
-//   "owner_id":             "SxPxchsmS.2tGPVdRPVHHg",
 //   "project_manager_id":   "IGDTvm71TuSnsezrMYyL5Q",
-//   "entity_manager_id":    "IGDTvm71TuSnsezrMYyL5Q"
+//   "project_manager_name": "Diego Tobias",
+//   "entity_manager_id":    "IGDTvm71TuSnsezrMYyL5Q",
+//   "entity_manager_name":  "Diego Tobias"
 // }
 //
 // RETURNS:
 // {
+//   "auto_approved": false,
+//   "steps": [ ... ],
+//   "total_steps": 3,
 //   "ceo_required": true,
-//   "reasons": ["both_steps_skipped"],
-//   "threshold": 50000
+//   "ceo_reason": "amount_exceeds_threshold",
+//   "ceo_reasons": ["amount_exceeds_threshold"],
+//   "threshold": 50000,
+//   "summary": "Project Manager (Diego Tobias) → Entity Manager (Bob) → CEO",
+//   "short_summary": "3-step approval",
+//   "step_labels": ["Project Manager (Diego Tobias)", "Entity Manager (Bob)", "CEO"]
 // }
 // ═══════════════════════════════════════════════════════════════════════════════
-function isCeoRequired(data, config) {
-  var amount = Number(data.budget_total) || 0;
-  var term   = data.term || "Monthly";
-  var owner  = data.owner_id;
-  var pmId   = data.project_manager_id;
-  var emId   = data.entity_manager_id;
+function getApprovalChain(data, config) {
+  var chain = getRequiredApprovers(data, config);
 
-  var reasons = [];
-
-  var pmSkipped = !isAssigned(pmId) || sameUser(owner, pmId);
-  var emSkipped = !isAssigned(emId) || sameUser(owner, emId);
-
-  if (pmSkipped && emSkipped) {
-    reasons.push("both_steps_skipped");
+  // ── CEO reasons (expanded array form) ──
+  var ceoReasons = [];
+  if (chain.ceo_reason) {
+    ceoReasons = chain.ceo_reason.split("+");
   }
 
-  var threshold = getThresholdForTerm(term, config);
-  if (amount > threshold) {
-    reasons.push("amount_exceeds_threshold");
-  }
-
-  return {
-    ceo_required: reasons.length > 0,
-    reasons: reasons,
-    threshold: threshold
-  };
-}
-
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// FUNCTION 7: getApprovalChainSummary
-// ═══════════════════════════════════════════════════════════════════════════════
-//
-// PAYLOAD: Same as getRequiredApprovers
-//
-// RETURNS:
-// {
-//   "summary": "Project Manager (Diego Tobias) → CEO",
-//   "short_summary": "2-step approval",
-//   "step_labels": ["Project Manager (Diego Tobias)", "CEO"]
-// }
-// ═══════════════════════════════════════════════════════════════════════════════
-function getApprovalChainSummary(data, config) {
-  var result = getRequiredApprovers(data, config);
-
-  if (result.auto_approved) {
-    return {
-      summary: "Auto-approved (CEO submission)",
-      short_summary: "Auto-approved",
-      step_labels: []
-    };
-  }
-
+  // ── Summary labels ──
   var ROLE_LABELS = {
     "project_manager": "Project Manager",
     "entity_manager": "Entity Manager"
   };
   ROLE_LABELS[CEO_ROLE] = "CEO";
 
-  var labels = result.steps.map(function(s) {
-    var label = ROLE_LABELS[s.role] || s.role;
-    var name = s.user_name || "";
-    return name ? label + " (" + name + ")" : label;
-  });
+  var summary, shortSummary, stepLabels;
 
-  var n = result.steps.length;
-  var shortLabel = n === 1 ? "1-step approval" : n + "-step approval";
+  if (chain.auto_approved) {
+    summary = "Auto-approved (CEO submission)";
+    shortSummary = "Auto-approved";
+    stepLabels = [];
+  } else {
+    stepLabels = chain.steps.map(function(s) {
+      var label = ROLE_LABELS[s.role] || s.role;
+      var name = s.user_name || "";
+      return name ? label + " (" + name + ")" : label;
+    });
+    summary = stepLabels.join(" → ");
+    var n = chain.steps.length;
+    shortSummary = n === 1 ? "1-step approval" : n + "-step approval";
+  }
 
   return {
-    summary: labels.join(" → "),
-    short_summary: shortLabel,
-    step_labels: labels,
-    ceo_required: result.ceo_required,
-    ceo_reason: result.ceo_reason
+    auto_approved: chain.auto_approved,
+    steps: chain.steps,
+    total_steps: chain.total_steps,
+    ceo_required: chain.ceo_required,
+    ceo_reason: chain.ceo_reason,
+    ceo_reasons: ceoReasons,
+    threshold: chain.threshold,
+    summary: summary,
+    short_summary: shortSummary,
+    step_labels: stepLabels
   };
 }
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// FUNCTION 8: canUserEditBudget
+// CONSOLIDATED FUNCTION 3: getApprovalProgress
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Determines whether the active user can edit a budget.
-// Only budgets in Draft status are editable, and only by:
-//   • Owner (budget submitter)
-//   • Responsible
-//   • Project Manager
-//   • Entity Manager
-//   • CEO (tre.auth.ceo role)
+// Merges: getApprovalStatus + getNextPendingStep
+// Single call returns workflow state, progress, and who needs to act next.
 //
-// PAYLOAD:  Budget row JSON + active user fields
-//   Pass the full budget row JSON and append "user_id" and "user_roles".
-//   The function reads: owner_id, responsible_id, project_manager_id,
-//   entity_manager_id, approval_status directly from the budget row.
-//
+// PAYLOAD:
 // {
-//   "user_id":    "«Signed-In User RowID»",
-//   "user_roles": "«Signed-In User Roles»",
-//   ... all budget row fields (id, title, owner_id, responsible_id, etc.) ...
+//   "approval_steps":   [...],
+//   "completed_steps":  [1, 2],
+//   "rejected_step":    null,
+//   "auto_approved":    false
 // }
 //
 // RETURNS:
 // {
-//   "can_edit": true,
-//   "reason": "user_is_project_manager"
-//                   // possible reasons: user_is_ceo, user_is_owner,
-//                   //   user_is_responsible, user_is_project_manager,
-//                   //   user_is_entity_manager, no_permission,
-//                   //   budget_not_in_draft, no_user_id
+//   "overall_status":   "pending",
+//   "progress":         "1/2",
+//   "percent_complete":  50,
+//   "is_complete":      false,
+//   "pending_steps":    [...],
+//   "completed_steps":  [...],
+//   "rejected_at":      null,
+//   "next_step":        2,
+//   "next_role":        "entity_manager",
+//   "next_user_id":     "...",
+//   "next_user_name":   "Diego Tobias",
+//   "next_display_label": "Entity Manager"
 // }
 // ═══════════════════════════════════════════════════════════════════════════════
-function canUserEditBudget(data) {
-  var userId = data.user_id;
-  var roles  = parseRoles(data.user_roles);
-  var status = (data.approval_status || "").toLowerCase().trim();
+function getApprovalProgress(data) {
+  var statusResult = getApprovalStatus(data);
+  var nextResult   = getNextPendingStep(data);
 
-  // Only Draft budgets are editable
-  if (status !== "draft") {
-    return { can_edit: false, reason: "budget_not_in_draft" };
-  }
-
-  if (!userId) {
-    return { can_edit: false, reason: "no_user_id" };
-  }
-
-  // CEO can always edit
-  if (roles.indexOf(CEO_ROLE) !== -1) {
-    return { can_edit: true, reason: "user_is_ceo" };
-  }
-
-  // Owner
-  if (sameUser(userId, data.owner_id)) {
-    return { can_edit: true, reason: "user_is_owner" };
-  }
-
-  // Responsible
-  if (sameUser(userId, data.responsible_id)) {
-    return { can_edit: true, reason: "user_is_responsible" };
-  }
-
-  // Project Manager
-  if (sameUser(userId, data.project_manager_id)) {
-    return { can_edit: true, reason: "user_is_project_manager" };
-  }
-
-  // Entity Manager
-  if (sameUser(userId, data.entity_manager_id)) {
-    return { can_edit: true, reason: "user_is_entity_manager" };
-  }
-
-  return { can_edit: false, reason: "no_permission" };
+  return {
+    // ── Status fields ──
+    overall_status: statusResult.overall_status,
+    progress: statusResult.progress,
+    percent_complete: statusResult.percent_complete,
+    is_complete: statusResult.is_complete,
+    pending_steps: statusResult.pending_steps || [],
+    completed_steps: statusResult.completed_steps || [],
+    rejected_at: statusResult.rejected_at || null,
+    // ── Next step fields ──
+    has_next: nextResult.has_next,
+    next_step: nextResult.step,
+    next_role: nextResult.role,
+    next_user_id: nextResult.user_id,
+    next_user_name: nextResult.user_name,
+    next_display_label: nextResult.display_label
+  };
 }
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// FUNCTION 9: canUserDeleteBudget
+// CONSOLIDATED FUNCTION 5: getUserPermissions
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Determines whether the active user can delete a budget.
-// Only the Owner and the CEO can delete a budget.
+// Merges: canUserEditBudget + canUserDeleteBudget
+// Single call returns both edit and delete permissions for the active user.
 //
 // PAYLOAD:  Budget row JSON + active user fields
-//   Pass the full budget row JSON and append "user_id" and "user_roles".
-//   The function reads: owner_id directly from the budget row.
-//
 // {
 //   "user_id":    "«Signed-In User RowID»",
 //   "user_roles": "«Signed-In User Roles»",
-//   ... all budget row fields (id, title, owner_id, etc.) ...
+//   ... all budget row fields (owner_id, responsible_id, approval_status, etc.) ...
 // }
 //
 // RETURNS:
 // {
-//   "can_delete": true,
-//   "reason": "user_is_owner"
-//                   // possible reasons: user_is_ceo, user_is_owner,
-//                   //   no_permission, no_user_id
+//   "can_edit":       true,
+//   "edit_reason":    "user_is_owner",
+//   "can_delete":     true,
+//   "delete_reason":  "user_is_owner"
 // }
 // ═══════════════════════════════════════════════════════════════════════════════
-function canUserDeleteBudget(data) {
+function getUserPermissions(data) {
   var userId = data.user_id;
   var roles  = parseRoles(data.user_roles);
+  var status = (data.approval_status || "").toLowerCase().trim();
+  var isCeo  = roles.indexOf(CEO_ROLE) !== -1;
+
+  // ── Default: no permissions ──
+  var canEdit = false;
+  var editReason = "no_permission";
+  var canDelete = false;
+  var deleteReason = "no_permission";
 
   if (!userId) {
-    return { can_delete: false, reason: "no_user_id" };
+    return {
+      can_edit: false,  edit_reason: "no_user_id",
+      can_delete: false, delete_reason: "no_user_id"
+    };
   }
 
-  // CEO can always delete
-  if (roles.indexOf(CEO_ROLE) !== -1) {
-    return { can_delete: true, reason: "user_is_ceo" };
+  // ── Edit permissions (Draft only) ──
+  if (status === "draft") {
+    if (isCeo) {
+      canEdit = true; editReason = "user_is_ceo";
+    } else if (sameUser(userId, data.owner_id)) {
+      canEdit = true; editReason = "user_is_owner";
+    } else if (sameUser(userId, data.responsible_id)) {
+      canEdit = true; editReason = "user_is_responsible";
+    } else if (sameUser(userId, data.project_manager_id)) {
+      canEdit = true; editReason = "user_is_project_manager";
+    } else if (sameUser(userId, data.entity_manager_id)) {
+      canEdit = true; editReason = "user_is_entity_manager";
+    }
+  } else {
+    editReason = "budget_not_in_draft";
   }
 
-  // Owner
-  if (sameUser(userId, data.owner_id)) {
-    return { can_delete: true, reason: "user_is_owner" };
+  // ── Delete permissions (Owner + CEO, any status) ──
+  if (isCeo) {
+    canDelete = true; deleteReason = "user_is_ceo";
+  } else if (sameUser(userId, data.owner_id)) {
+    canDelete = true; deleteReason = "user_is_owner";
   }
 
-  return { can_delete: false, reason: "no_permission" };
+  return {
+    can_edit: canEdit,
+    edit_reason: editReason,
+    can_delete: canDelete,
+    delete_reason: deleteReason
+  };
 }
 
 
@@ -767,11 +756,32 @@ window.function = function (functionName, payload, config) {
   var result;
 
   switch (fn) {
-    case "getRequiredApprovers":
-      result = getRequiredApprovers(data, mergedConfig);
+    // ── Consolidated functions (use these) ──
+    case "getApprovalChain":
+      result = getApprovalChain(data, mergedConfig);
       break;
     case "canUserApprove":
       result = canUserApprove(data);
+      break;
+    case "getApprovalProgress":
+      result = getApprovalProgress(data);
+      break;
+    case "validateSubmission":
+      result = validateSubmission(data, mergedConfig);
+      break;
+    case "getUserPermissions":
+      result = getUserPermissions(data);
+      break;
+
+    // ── Legacy aliases (backward compatibility) ──
+    case "getRequiredApprovers":
+      result = getRequiredApprovers(data, mergedConfig);
+      break;
+    case "isCeoRequired":
+      result = getApprovalChain(data, mergedConfig);  // superset
+      break;
+    case "getApprovalChainSummary":
+      result = getApprovalChain(data, mergedConfig);  // superset
       break;
     case "getApprovalStatus":
       result = getApprovalStatus(data);
@@ -779,34 +789,22 @@ window.function = function (functionName, payload, config) {
     case "getNextPendingStep":
       result = getNextPendingStep(data);
       break;
-    case "validateSubmission":
-      result = validateSubmission(data, mergedConfig);
-      break;
-    case "isCeoRequired":
-      result = isCeoRequired(data, mergedConfig);
-      break;
-    case "getApprovalChainSummary":
-      result = getApprovalChainSummary(data, mergedConfig);
-      break;
     case "canUserEditBudget":
-      result = canUserEditBudget(data);
+      result = getUserPermissions(data);  // superset
       break;
     case "canUserDeleteBudget":
-      result = canUserDeleteBudget(data);
+      result = getUserPermissions(data);  // superset
       break;
+
     default:
       result = {
         error: "Unknown function: " + fn,
         available_functions: [
-          "getRequiredApprovers",
+          "getApprovalChain",
           "canUserApprove",
-          "getApprovalStatus",
-          "getNextPendingStep",
+          "getApprovalProgress",
           "validateSubmission",
-          "isCeoRequired",
-          "getApprovalChainSummary",
-          "canUserEditBudget",
-          "canUserDeleteBudget"
+          "getUserPermissions"
         ]
       };
   }
