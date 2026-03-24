@@ -1,0 +1,28 @@
+[
+  {
+    "kind": "column",
+    "name": "Transaction Approval Engine",
+    "description": "Multi-function transaction authorization engine. Pass a function name, JSON payload, and optional config JSON. Returns a JSON string.\n\nConsolidated functions (4):\n• getApprovalChain — Full approval chain + CEO reasons + budget impact + display summary. Input: transaction row with owner_roles, manager limits (pm/em monthly/accumulated), budget figures.\n• getApprovalProgress — Status + progress + next step + can-approve gate. Input: approval_steps, completed_steps, rejected_step, auto_approved + approver_id, approver_roles, owner_id, approval_status, project_manager_id, entity_manager_id.\n• validateSubmission — Pre-submit validation (errors/warnings/budget check). Input: transaction row fields + budget status/figures + vendor_id.\n• getUserPermissions — Edit/delete/cancel permissions + invoice review status. Input: transaction row + user_id, user_roles + responsible_id, responsible_name, invoice_reviewed.\n\nLegacy aliases: canUserApprove → getApprovalProgress (superset), getInvoiceReview → getUserPermissions (superset).\nInternal functions also accessible: getRequiredApprovers, getApprovalStatus, getNextPendingStep.",
+    "author": "JAS",
+    "params": [
+      {
+        "name": "functionName",
+        "displayName": "Function name",
+        "type": "string"
+      },
+      {
+        "name": "payload",
+        "displayName": "JSON payload",
+        "type": "string"
+      },
+      {
+        "name": "config",
+        "displayName": "Config JSON",
+        "type": "string"
+      }
+    ],
+    "result": {
+      "type": "string"
+    }
+  }
+]
