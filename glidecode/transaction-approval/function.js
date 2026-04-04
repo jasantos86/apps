@@ -492,7 +492,30 @@ function canUserApproveInternal(data) {
     return { can_approve: false, reason: "cannot_approve_own_submission", step_number: null, role: null };
   }
 
-  // CEO can always approve (override all remaining steps)
+  // Determine which approval roles this user fulfills by their assignment
+  var approverRolesList = [];
+  if (sameUser(approverId, pmId)) approverRolesList.push("project_manager");
+  if (sameUser(approverId, emId)) approverRolesList.push("entity_manager");
+
+  // Check contextual role first — if user is PM/EM for this transaction,
+  // approve as that role even if they are also CEO
+  for (var j = 0; j < approvalSteps.length; j++) {
+    var step = approvalSteps[j];
+    if (completedSteps.indexOf(step.step) !== -1) continue; // already completed
+    if (approverRolesList.indexOf(step.role) !== -1) {
+      return {
+        can_approve: true,
+        reason: "user_is_next_approver",
+        step_number: step.step,
+        role: step.role
+      };
+    }
+    // If the next pending step is not for this user's contextual role, stop —
+    // unless they are CEO (handled below as override)
+    break;
+  }
+
+  // CEO override — only reached if user has no contextual role match for the next step
   if (isCeo) {
     var nextForCeo = null;
     for (var i = 0; i < approvalSteps.length; i++) {
@@ -509,29 +532,8 @@ function canUserApproveInternal(data) {
     };
   }
 
-  // Determine which approval roles this user fulfills
-  var approverRolesList = [];
-  if (sameUser(approverId, pmId)) approverRolesList.push("project_manager");
-  if (sameUser(approverId, emId)) approverRolesList.push("entity_manager");
-
   if (approverRolesList.length === 0) {
     return { can_approve: false, reason: "user_has_no_approval_role", step_number: null, role: null };
-  }
-
-  // Find the next pending step that matches one of the user's roles
-  for (var j = 0; j < approvalSteps.length; j++) {
-    var step = approvalSteps[j];
-    if (completedSteps.indexOf(step.step) !== -1) continue; // already completed
-    if (approverRolesList.indexOf(step.role) !== -1) {
-      return {
-        can_approve: true,
-        reason: "user_is_next_approver",
-        step_number: step.step,
-        role: step.role
-      };
-    }
-    // If the next pending step is not for this user, they can't jump ahead
-    break;
   }
 
   return { can_approve: false, reason: "not_current_approver", step_number: null, role: null };

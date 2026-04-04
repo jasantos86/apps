@@ -284,31 +284,10 @@ function canUserApprove(data) {
     return { can_approve: false, reason: "cannot_approve_own_submission", step_number: null, role: null };
   }
 
-  // CEO can always approve (override all remaining steps)
-  if (isCeo) {
-    var nextForCeo = null;
-    for (var i = 0; i < approvalSteps.length; i++) {
-      if (completedSteps.indexOf(approvalSteps[i].step) === -1) {
-        nextForCeo = approvalSteps[i];
-        break;
-      }
-    }
-    return {
-      can_approve: true,
-      reason: "ceo_override",
-      step_number: nextForCeo ? nextForCeo.step : null,
-      role: CEO_ROLE
-    };
-  }
-
-  // Determine which approval roles this user fulfills (can be multiple)
+  // Determine which approval roles this user fulfills by their assignment
   var approverRolesList = [];
   if (sameUser(approverId, pmId)) approverRolesList.push("project_manager");
   if (sameUser(approverId, emId)) approverRolesList.push("entity_manager");
-
-  if (approverRolesList.length === 0) {
-    return { can_approve: false, reason: "user_has_no_approval_role", step_number: null, role: null };
-  }
 
   // Find the next pending step
   var nextPending = null;
@@ -320,10 +299,11 @@ function canUserApprove(data) {
   }
 
   if (!nextPending) {
-    return { can_approve: false, reason: "all_steps_complete", step_number: null, role: approverRolesList[0] };
+    return { can_approve: false, reason: "all_steps_complete", step_number: null, role: approverRolesList[0] || null };
   }
 
-  // Check if ANY of this user's roles match the next pending step
+  // Check contextual role first — if user is PM/EM for this budget,
+  // approve as that role even if they are also CEO
   if (approverRolesList.indexOf(nextPending.role) !== -1) {
     return {
       can_approve: true,
@@ -331,6 +311,20 @@ function canUserApprove(data) {
       step_number: nextPending.step,
       role: nextPending.role
     };
+  }
+
+  // CEO override — only reached if user has no contextual role match for the next step
+  if (isCeo) {
+    return {
+      can_approve: true,
+      reason: "ceo_override",
+      step_number: nextPending.step,
+      role: CEO_ROLE
+    };
+  }
+
+  if (approverRolesList.length === 0) {
+    return { can_approve: false, reason: "user_has_no_approval_role", step_number: null, role: null };
   }
 
   return {
