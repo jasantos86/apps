@@ -129,14 +129,12 @@ function isAutoApprovedType(type) {
 //   "project_manager_name":   "Diego Tobias",
 //   "entity_manager_id":      "IGDTvm71TuSnsezrMYyL5Q",
 //   "entity_manager_name":    "Diego Tobias",
-//   "pm_monthly_limit":       50000,       // null/undefined = unlimited
-//   "pm_accumulated_limit":   500000,      // null/undefined = unlimited
+//   "pm_single_limit":        10000,       // null/undefined = unlimited per transaction
+//   "pm_monthly_limit":       50000,       // null/undefined = unlimited per month
 //   "pm_monthly_used":        12000,       // how much PM has approved this month
-//   "pm_accumulated_used":    120000,      // PM lifetime approved total
-//   "em_monthly_limit":       100000,      // null/undefined = unlimited
-//   "em_accumulated_limit":   1000000,     // null/undefined = unlimited
+//   "em_single_limit":        25000,       // null/undefined = unlimited per transaction
+//   "em_monthly_limit":       100000,      // null/undefined = unlimited per month
 //   "em_monthly_used":        45000,       // how much EM has approved this month
-//   "em_accumulated_used":    300000,      // EM lifetime approved total
 //   "budget_allocated":       100000,      // total budget allocated amount
 //   "budget_reserved":        20000,       // currently reserved by pending txns
 //   "budget_spent":           30000        // already spent/paid
@@ -237,8 +235,8 @@ function getRequiredApprovers(data, config) {
     // Check PM limits
     var pmWithinLimits = checkManagerLimits(
       amount,
-      data.pm_monthly_limit, data.pm_monthly_used,
-      data.pm_accumulated_limit, data.pm_accumulated_used
+      data.pm_single_limit,
+      data.pm_monthly_limit, data.pm_monthly_used
     );
     if (pmWithinLimits.within_limits) {
       steps.push({
@@ -270,8 +268,8 @@ function getRequiredApprovers(data, config) {
     // Check EM limits
     var emWithinLimits = checkManagerLimits(
       amount,
-      data.em_monthly_limit, data.em_monthly_used,
-      data.em_accumulated_limit, data.em_accumulated_used
+      data.em_single_limit,
+      data.em_monthly_limit, data.em_monthly_used
     );
     if (emWithinLimits.within_limits) {
       steps.push({
@@ -335,15 +333,23 @@ function getRequiredApprovers(data, config) {
 // HELPER: Check manager approval limits
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Returns { within_limits: true/false, exceeded_limit: null | "monthly" | "accumulated" | "both" }
+// Returns { within_limits: true/false, exceeded_limit: null | "single" | "monthly" | "both" }
 //
 // null/undefined limit = unlimited (no restriction).
-function checkManagerLimits(amount, monthlyLimit, monthlyUsed, accumulatedLimit, accumulatedUsed) {
+function checkManagerLimits(amount, singleLimit, monthlyLimit, monthlyUsed) {
   var amt = toNum(amount);
+  var singleOk = true;
   var monthlyOk = true;
-  var accOk = true;
 
-  // Monthly check: if limit is defined and non-null
+  // Single-transaction check: amount must not exceed the per-transaction cap
+  if (singleLimit != null && singleLimit !== "" && singleLimit !== false) {
+    var sLimit = toNum(singleLimit);
+    if (sLimit > 0 && amt > sLimit) {
+      singleOk = false;
+    }
+  }
+
+  // Monthly check: cumulative approved this month + current must not exceed monthly cap
   if (monthlyLimit != null && monthlyLimit !== "" && monthlyLimit !== false) {
     var mLimit = toNum(monthlyLimit);
     var mUsed  = toNum(monthlyUsed);
@@ -352,19 +358,10 @@ function checkManagerLimits(amount, monthlyLimit, monthlyUsed, accumulatedLimit,
     }
   }
 
-  // Accumulated check: if limit is defined and non-null
-  if (accumulatedLimit != null && accumulatedLimit !== "" && accumulatedLimit !== false) {
-    var aLimit = toNum(accumulatedLimit);
-    var aUsed  = toNum(accumulatedUsed);
-    if (aLimit > 0 && (aUsed + amt) > aLimit) {
-      accOk = false;
-    }
-  }
-
-  if (monthlyOk && accOk) {
+  if (singleOk && monthlyOk) {
     return { within_limits: true, exceeded_limit: null };
   }
-  var exceeded = (!monthlyOk && !accOk) ? "both" : (!monthlyOk ? "monthly" : "accumulated");
+  var exceeded = (!singleOk && !monthlyOk) ? "both" : (!singleOk ? "single" : "monthly");
   return { within_limits: false, exceeded_limit: exceeded };
 }
 
