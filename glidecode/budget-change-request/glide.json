@@ -1,0 +1,23 @@
+[
+  {
+    "kind": "column",
+    "name": "Budget Change Request Engine",
+    "description": "Multi-function approval engine for Budget Change Requests. Pass a function name and JSON payload. Returns a JSON string.\n\nFunctions (3):\n• getChangeRequestChain — Determines approval chain based on requestor's role (CEO > EM > PM > Responsible > Owner). No amount thresholds. Input: requestor_id, requestor_roles, owner_id, responsible_id, responsible_name, pm_id, pm_name, em_id, em_name.\n• getChangeRequestProgress — Tracks approval progress and determines what the signed-in user can do (approve/edit/cancel). Input: approval_steps, completed_steps, rejected_step, auto_approved, approver_id, approver_roles, requestor_id, request_status, responsible_id, pm_id, em_id.\n• validateChangeRequest — Pre-submit validation: checks naming conflicts, duplicate targets, and constraint violations across all line items. Input: items (array of change items with would_violate), existing_categories (array with subcategories).",
+    "author": "JAS",
+    "params": [
+      {
+        "name": "functionName",
+        "displayName": "Function name",
+        "type": "string"
+      },
+      {
+        "name": "payload",
+        "displayName": "JSON payload",
+        "type": "string"
+      }
+    ],
+    "result": {
+      "type": "string"
+    }
+  }
+]
