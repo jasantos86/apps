@@ -645,14 +645,17 @@ function validateChangeRequest(data) {
 // MAIN DISPATCH
 // ═══════════════════════════════════════════════════════════════════════════════
 window.function = function(function_name, payload) {
+  var rawFn      = (function_name  && function_name.value  !== undefined) ? function_name.value  : function_name;
+  var rawPayload = (payload        && payload.value        !== undefined) ? payload.value        : payload;
+
   var data;
   try {
-    data = typeof payload === "string" ? JSON.parse(payload) : (payload || {});
+    data = typeof rawPayload === "string" ? JSON.parse(rawPayload) : (rawPayload || {});
   } catch (e) {
     return JSON.stringify({ error: "Invalid JSON payload: " + e.toString() });
   }
 
-  var fn = (function_name || "").trim();
+  var fn = (rawFn || "").trim();
   var result;
 
   if (fn === "getChangeRequestChain" || fn === "A") {
