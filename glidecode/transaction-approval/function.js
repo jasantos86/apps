@@ -129,12 +129,12 @@ function isAutoApprovedType(type) {
 //   "project_manager_name":   "Diego Tobias",
 //   "entity_manager_id":      "IGDTvm71TuSnsezrMYyL5Q",
 //   "entity_manager_name":    "Diego Tobias",
-//   "pm_single_limit":        10000,       // null/undefined = unlimited per transaction
+//   "pm_single_limit":        10000,       // null/undefined = unlimited per transaction; resolved from tre.util.budgetapprovers (project-scoped first, then general)
 //   "pm_monthly_limit":       50000,       // null/undefined = unlimited per month
-//   "pm_monthly_used":        12000,       // how much PM has approved this month
-//   "em_single_limit":        25000,       // null/undefined = unlimited per transaction
+//   "pm_monthly_used":        12000,       // how much PM has approved this month (current calendar month only)
+//   "em_single_limit":        25000,       // null/undefined = unlimited per transaction; resolved from tre.util.budgetapprovers (project-scoped first, then general)
 //   "em_monthly_limit":       100000,      // null/undefined = unlimited per month
-//   "em_monthly_used":        45000,       // how much EM has approved this month
+//   "em_monthly_used":        45000,       // how much EM has approved this month (current calendar month only)
 //   "budget_allocated":       100000,      // total budget allocated amount
 //   "budget_reserved":        20000,       // currently reserved by pending txns
 //   "budget_spent":           30000        // already spent/paid
@@ -654,10 +654,11 @@ function getApprovalProgress(data) {
 //   "transaction_type":     "expense",
 //   "transaction_amount":   15000,
 //   "budget_id":            "abc123",        // must have a budget assigned
+//   "subcategory_id":       "subcat-456",    // must have a subcategory assigned
 //   "budget_status":        "Active",        // budget must be Active
-//   "budget_allocated":     100000,
-//   "budget_reserved":      20000,
-//   "budget_spent":         30000,
+//   "budget_allocated":     10000,           // subcategory AssignedAmount
+//   "budget_reserved":      2000,            // subcategory reserved (pending/approved txns)
+//   "budget_spent":         3000,            // subcategory spent (paid txns)
 //   "vendor_id":            "vendor-1",      // must have a payee/vendor
 //   "owner_id":             "user-1",
 //   "owner_roles":          "Accountant",
@@ -717,9 +718,11 @@ function validateSubmission(data, config) {
     };
   }
 
-  // Budget check for expense transactions
+  // Budget + subcategory check for expense transactions
   if (!budgetId) {
     errors.push("Expense transactions must be assigned to a budget.");
+  } else if (!data.subcategory_id) {
+    errors.push("A budget subcategory must be selected before submitting.");
   } else {
     // Budget must be Active
     if (budgetStatus !== "active") {
